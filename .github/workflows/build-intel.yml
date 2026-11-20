@@ -1,0 +1,62 @@
+name: build-macos-intel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [build-intel]
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build app for x86_64
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: npm run tauri build -- --target x86_64-apple-darwin --bundles app -- --locked
+
+      - name: Inspect bundle
+        run: |
+          set -euo pipefail
+          APP_DIR=$(ls -d src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app | head -1)
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "bundle: $APP_DIR"
+          ls -la "$APP_DIR/Contents/MacOS"
+          file "$APP_DIR/Contents/MacOS/"*
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_DIR/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP_DIR/Contents/Info.plist"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent "$APP_DIR" agy-switch-macos-x64.zip
+          shasum -a 256 agy-switch-macos-x64.zip | tee agy-switch-macos-x64.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agy-switch-macos-x64
+          path: |
+            agy-switch-macos-x64.zip
+            agy-switch-macos-x64.zip.sha256
+          retention-days: 14
