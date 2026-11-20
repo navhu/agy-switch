@@ -30,20 +30,36 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Tauri's own ad-hoc signing step fails on this bundle, so bundle unsigned
+      # and sign every nested Mach-O ourselves below.
       - name: Build app for x86_64
         env:
-          APPLE_SIGNING_IDENTITY: "-"
           MACOSX_DEPLOYMENT_TARGET: "11.0"
-        run: npm run tauri build -- --target x86_64-apple-darwin --bundles app -- --locked
+        run: |
+          unset APPLE_SIGNING_IDENTITY
+          npm run tauri build -- --target x86_64-apple-darwin --bundles app -- --locked
 
-      - name: Inspect bundle
+      - name: Sign bundle
         run: |
           set -euo pipefail
           APP_DIR=$(ls -d src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app | head -1)
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
           echo "bundle: $APP_DIR"
+          while IFS= read -r -d '' f; do
+            if file "$f" | grep -q 'Mach-O'; then
+              echo "signing $f"
+              codesign --force --sign - --timestamp=none "$f"
+            fi
+          done < <(find "$APP_DIR/Contents" -type f -perm -u+x -print0)
+          codesign --force --sign - --timestamp=none "$APP_DIR"
+          codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+
+      - name: Inspect bundle
+        run: |
+          set -euo pipefail
           ls -la "$APP_DIR/Contents/MacOS"
           file "$APP_DIR/Contents/MacOS/"*
+          lipo -archs "$APP_DIR/Contents/MacOS/agy-switch-desktop"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_DIR/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP_DIR/Contents/Info.plist"
 
